@@ -1,0 +1,5 @@
+Sorry, please refer to GOOGLE DRIVE HUANGSIKAI8@GMAIL.COM FOR THE AI .h5 FILES
+- Echogenicity_model.h5
+- Macrocalcification_Model.h5
+- Margin_model.h5
+- Punctate_Echogenic_Foci_model.h5

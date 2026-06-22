@@ -1,0 +1,303 @@
+---
+title: "thyroid"
+author: "Joel"
+date: "7/28/2021"
+output: pdf_document
+---
+
+# Setup
+
+```{r eval=FALSE, echo=FALSE, results='hide', warning=FALSE}
+# # Necessary if running code in RStudio. Need to run this chunk manually.
+# Clear workspace and unload packages.
+# Avoids errors due to identically named functions from different packages.
+if (!("pacman" %in% installed.packages())) install.packages("pacman")
+pacman::p_unload(pacman::p_loaded(), character.only=TRUE)
+rm(list=ls(all=TRUE))
+
+# Set working directory to that of this .rmd file.
+# Automatically sets relative file pathing.
+if (!("rstudioapi" %in% installed.packages())) install.packages("rstudioapi")
+current_path <- rstudioapi::getActiveDocumentContext()$path 
+setwd(file.path(dirname(current_path)))
+```
+
+# Libraries
+
+```{r}
+library("pacman")
+p_load("tidyverse")
+p_load("data.table")
+p_load("readxl")
+p_load("gridExtra")
+```
+
+# EDA
+
+```{r}
+df <- as_tibble(fread('data\\nodule_findings.csv'))
+df$acr_tirads[is.na(df$acr_tirads)] <- "normal"
+df$bethesda[is.na(df$bethesda)] <- "Unlabelled"
+df
+```
+
+```{r}
+length(unique(df$sample_id))
+ggplot(df) + geom_bar(aes(x=acr_tirads), fill='royalblue', width=0.2, na.rm=FALSE) + 
+  ggtitle('Distribution of TI-RADS Scores')
+ggplot(df) + geom_bar(aes(x=bethesda), fill='royalblue', width=0.2, na.rm=FALSE) + 
+  ggtitle('Distribution of Bethesda Scores')
+ggplot(df) + geom_bar(aes(x=part), fill='royalblue', width=0.2) + 
+  ggtitle('Distribution of Parts')
+ggplot(df) + geom_bar(aes(x=view), fill='royalblue', width=0.2) + 
+  ggtitle('Distribution of Views')
+
+```
+
+```{r}
+temp <- df %>% 
+  group_by(sample_id) %>% 
+  summarise(`images per sample`=n())
+ggplot(temp) + 
+  geom_bar(aes(x=`images per sample`), fill='royalblue', width=0.2) + 
+  ggtitle('Distribution of Images per Sample')
+```
+
+```{r}
+temp <- df %>% 
+  group_by(sample_id, acr_tirads) %>% 
+  summarise(`scans per sample`=n()) %>% 
+  summarise(`number of different TI-RADS scores`=n())
+ggplot(temp) + 
+  geom_bar(aes(x=`number of different TI-RADS scores`), fill='royalblue', width=0.2) + 
+  ggtitle('Distribution of Samples with Different TI-RADS Scores')
+```
+
+```{r}
+df %>% 
+  group_by(sample_id) %>% 
+  summarise(view) %>% 
+  summarise(n=n()) %>% 
+  arrange(n)
+  
+temp <- df %>% 
+  group_by(sample_id) %>% 
+  summarise(view) %>% 
+  ungroup()
+
+cur_id <- 281
+has_long <- FALSE
+has_trans <- FALSE
+for (i in 1:nrow(temp)) {
+  row <- temp[i,]
+  if (row$sample_id == cur_id) {
+    if (row$view == 'both') {
+      has_long <- TRUE
+      has_trans <- TRUE
+    } else if (row$view == 'longitudinal') {
+      has_long <- TRUE
+    } else if (row$view == 'transverse') {
+      has_trans <- TRUE
+    }
+  } else {
+    if (!has_long | !has_trans) {
+      print(cur_id)
+    }
+    cur_id <- row$sample_id
+    has_long <- FALSE
+    has_trans <- FALSE
+    if (row$view == 'both') {
+      has_long <- TRUE
+      has_trans <- TRUE
+    } else if (row$view == 'longitudinal') {
+      has_long <- TRUE
+    } else if (row$view == 'transverse') {
+      has_trans <- TRUE
+    }
+  }
+}
+```
+
+
+# Concatenate data
+
+```{r}
+cum_df <- data.frame(sample_id=integer(),
+                     image=character(), 
+                     machine=character(), 
+                     lobe=factor(), 
+                     view=factor(), 
+                     position=character(), 
+                     nodule_id=character(), 
+                     nodule_side=factor(), 
+                     nodule_location=character(), 
+                     size_cm=character(), 
+                     composition=factor(), 
+                     echogenicity=factor(), 
+                     shape=factor(), 
+                     margin=factor(), 
+                     comet_tail=factor(), 
+                     macrocalcifications=factor(), 
+                     peripheral_calcifications=factor(), 
+                     punctate_foci=factor(), 
+                     compo_score=integer(), 
+                     echo_score=integer(), 
+                     shape_score=integer(), 
+                     margin_score=integer(), 
+                     macro_score=integer(), 
+                     peripheral_score=integer(), 
+                     punctate_score=integer(), 
+                     total_score=integer(), 
+                     acr_tirads=integer(), 
+                     Bethesda=integer(), 
+                     comments=character(), 
+                     stringsAsFactors=FALSE) 
+data_path <- file.path("..", "data", "singhealth")
+patient_ids <- list.dirs(data_path, full.names=FALSE, recursive=FALSE)
+patient_ids <- patient_ids[patient_ids != "test_patients"]
+for (patient_id in patient_ids) {
+  csv_path <- file.path(data_path, patient_id, paste0(patient_id, " revised.xlsx"))
+  df <- csv_path %>% 
+    read_excel(sheet="template") %>% 
+    filter(!is.na(total_score))
+  cum_df <- rbind(cum_df, df)
+}
+cum_df <- cum_df %>% 
+  mutate(id = row_number()) %>% 
+  relocate(id)
+```
+
+```{r}
+temp_df <- cum_df %>% 
+  separate(image, c("image_id", "nodule_id"), sep="n") %>% 
+  group_by(sample_id, image_id) %>% 
+  filter(n() > 1)
+double_nodules <- temp_df$id
+final_df <- cum_df %>% 
+  filter(view != "Both", !id %in% double_nodules) %>% 
+  select(-id)
+```
+
+```{r}
+write_csv(final_df, file.path(data_path, "aggregate.csv"))
+```
+
+```{r}
+a <- ggplot(final_df) + geom_bar(aes(x=composition))
+b <- ggplot(final_df) + geom_bar(aes(x=echogenicity))
+c <- ggplot(final_df) + geom_bar(aes(x=shape))
+d <- ggplot(final_df) + geom_bar(aes(x=margin))
+e <- ggplot(final_df) + geom_bar(aes(x=comet_tail))
+f <- ggplot(final_df) + geom_bar(aes(x=macrocalcifications))
+g <- ggplot(final_df) + geom_bar(aes(x=peripheral_calcifications))
+h <- ggplot(final_df) + geom_bar(aes(x=punctate_foci))
+grid.arrange(a, b, c, d, e, f, g, h, ncol=4, nrow=2)
+```
+
+
+
+
+
+
+
+```{r}
+data_path <- file.path("..", "data", "singhealth", "nodule_info.csv")
+df <- fread(data_path) %>% 
+  as_tibble %>% 
+  filter(nodule_id != "u")
+a <- ggplot(df) + geom_bar(aes(x=composition)) + 
+  coord_flip() + 
+  ggtitle("Composition") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background = element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+b <- ggplot(df) + geom_bar(aes(x=echogenicity)) + 
+  coord_flip() + 
+  ggtitle("Echogenicity") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background = element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+c <- ggplot(df) + geom_bar(aes(x=shape)) + 
+  coord_flip() + 
+  ggtitle("Shape") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background = element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+d <- ggplot(df) + geom_bar(aes(x=margin)) + 
+  coord_flip() + 
+  ggtitle("Margin") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background = element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+e <- ggplot(df) + geom_bar(aes(x=comet_tail)) + 
+  coord_flip() + 
+  ggtitle("Comet Tail") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background = element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+f <- ggplot(df) + geom_bar(aes(x=macrocalcifications)) + 
+  coord_flip() + 
+  ggtitle("Macrocalcifications") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background = element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+g <- ggplot(df) + geom_bar(aes(x=peripheral_calcifications)) + 
+  coord_flip() + 
+  ggtitle("Peripheral Calcifications") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background = element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+h <- ggplot(df) + geom_bar(aes(x=punctate_foci)) + 
+  coord_flip() + 
+  ggtitle("Punctate Foci") + 
+  theme(axis.title=element_blank(), 
+        text = element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background=element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+apl <- align_plots(a, b, c, d, e, f, g, h, align="hv")
+grid.arrange(apl[[1]], apl[[2]], apl[[3]], apl[[4]], 
+             apl[[5]], apl[[6]], apl[[7]], apl[[8]], ncol=2, nrow=4)
+```
+
+
+```{r}
+sample_sizes <- c(11114, 131, 89, 2235, 276, 16, 298, 
+                  106, 286, 826, 50, 118, 757, 1396, 695, 
+                  221, 1230, 519, 276, 17627, 592, 4782)
+study_names <- c("Peng et al.", "Nugroho et al.", 
+                 "Choi et al.", "Qing et al.", 
+                 "Lei Wang et al.", "Ours", "TDID Dataset", 
+                 "Zhao et al.", "Park et al.", "Zhang et al.", 
+                 "Yoo et al.", "Chang et al.", "Kim et al.", 
+                 "Wu et al.", "Jin et al.", "Liang et al.", 
+                 "Buda et al.", "Ko et al.", "Wang et al.", 
+                 "Li et al.", "Chi et al.", "Ma et al.")
+df <- tibble(study_name=study_names, sample_size=sample_sizes)
+```
+
+```{r}
+ggplot(df) + geom_col(aes(x=reorder(study_name, sample_size), 
+                          y=sample_size)) + 
+  labs(title="Cohort Sizes of Other Studies", 
+       y="Cohort Size", x="Study Names") + 
+  coord_flip() + 
+  theme(text=element_text(size=20), 
+        plot.title=element_text(hjust=0.5), 
+        plot.background=element_rect(fill='#D6E5D9', color='#D6E5D9'), 
+        panel.background=element_rect(fill='#B4C7E7', colour='#B4C7E7'))
+```
